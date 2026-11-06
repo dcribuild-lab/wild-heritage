@@ -268,14 +268,68 @@
         if(item.name==='RI state conservation')group.addTo(map);
       }
       const basemaps={Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly'),'USGS hybrid imagery + topo':tiles('USGSImageryTopo'),'USGS shaded relief':tiles('USGSShadedReliefOnly')};
-      const control=L.control.layers(basemaps,overlays,{collapsed:false}).addTo(map);
-      const panel=control.getContainer();
-      panel.hidden=true;
-      panel.style.display='none';
+      const panel=id('layersDashboard');
+      const groups=[
+        ['Basemap',basemaps,true],
+        ['Land & access',Object.fromEntries(Object.entries(overlays).filter(([name])=>!name.startsWith('My '))),false],
+        ['My fieldwork',Object.fromEntries(Object.entries(overlays).filter(([name])=>name.startsWith('My '))),false]
+      ];
+      const hints={
+        Streets:'Roads, paths and place names',
+        'USGS topographic':'Contours and mapped features',
+        'USGS aerial imagery':'Overhead photography',
+        'USGS hybrid imagery + topo':'Photography with map detail',
+        'USGS shaded relief':'Shaded terrain shape',
+        'RI tax parcels':'Rhode Island reference boundaries · zoom 16+',
+        'RI state conservation':'Rhode Island state conservation · zoom 10+',
+        'RI local conservation':'Rhode Island local conservation · zoom 10+',
+        'US protected lands (PAD-US 3.0)':'U.S. protected areas · check official access rules',
+        'My acorn observations':'Acorn checks saved on this device',
+        'My stewardship work':'Stewardship visits saved on this device'
+      };
+      const controls=[];
+      for(const [title,layers,base] of groups){
+        const field=document.createElement('fieldset');
+        const legend=document.createElement('legend');
+        legend.textContent=title;
+        field.append(legend);
+        for(const [name,layer] of Object.entries(layers)){
+          const label=document.createElement('label');
+          const input=document.createElement('input');
+          input.type=base?'radio':'checkbox';
+          if(base)input.name='wildheritage-basemap';
+          const nameText=document.createElement('span');
+          nameText.textContent=name;
+          const hint=document.createElement('small');
+          hint.textContent=hints[name];
+          label.append(input,nameText,hint);
+          field.append(label);
+          controls.push({input,layer});
+          input.onchange=()=>{
+            if(base){
+              Object.values(basemaps).forEach(other=>{if(other!==layer)map.removeLayer(other);});
+              map.addLayer(layer);
+            }else if(input.checked)map.addLayer(layer);
+            else map.removeLayer(layer);
+            savePreferences();
+            syncControls();
+          };
+        }
+        id('layerChoices').append(field);
+      }
+      function syncControls(){
+        for(const {input,layer} of controls)input.checked=map.hasLayer(layer);
+        const count=Object.values(overlays).filter(layer=>map.hasLayer(layer)).length;
+        id('mapLayers').textContent='Layers · '+count+' on';
+      }
       id('mapLayers').onclick=()=>{
         panel.hidden=!panel.hidden;
-        panel.style.display=panel.hidden?'none':'';
         id('mapLayers').setAttribute('aria-expanded',String(!panel.hidden));
+      };
+      id('resetLayers').onclick=()=>{
+        delete preferences[activeMode];
+        applyPreferences();
+        savePreferences();
       };
       id('mapWind').onclick=()=>{
         const weather=id('weatherPanel');
@@ -284,10 +338,8 @@
         id('loadWeather').focus();
       };
       id('mapOffline').onclick=()=>{id('offlineInfo').hidden=!id('offlineInfo').hidden;};
-      let switching=false;
       applyPreferences=()=>{
-        switching=true;
-        try {
+
           const defaults=activeMode==='conserve'?['RI local conservation','My stewardship work']:['RI state conservation','My acorn observations'];
           const saved=preferences[activeMode]||{};
           const base=Object.hasOwn(basemaps,saved.base)?saved.base:activeMode==='conserve'?'USGS topographic':'Streets';
@@ -300,16 +352,15 @@
             if(enabled.includes(name))map.addLayer(layer);
             else map.removeLayer(layer);
           }
-        } finally { switching=false; }
+        syncControls();
       };
-      map.on('baselayerchange overlayadd overlayremove',()=>{
-        if(switching)return;
+      function savePreferences(){
         preferences[activeMode]={
           base:Object.keys(basemaps).find(name=>map.hasLayer(basemaps[name])),
           overlays:Object.keys(overlays).filter(name=>map.hasLayer(overlays[name]))
         };
         try { localStorage.setItem('wildheritage.mapPreferences',JSON.stringify(preferences)); } catch {}
-      });
+      }
       applyPreferences();
       insights();
     }
