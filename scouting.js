@@ -7,7 +7,7 @@
       fields:{Acres:'Mapped acres',Last_UPD:'Source update',E911Desc:'Land use',PctForest:'Forest cover (%)'}},
     {name:'RI state conservation', url:ri+'ENV_Conservation_Lands_State_spf/FeatureServer/0', zoom:10, color:'#087b50', title:'NAME',
       fields:{DEM_AREA:'DEM area',ACQ_TYPE:'Protection type',ManArea:'Management area',Pub_Access:'Dataset access code',HUNTING:'Dataset hunting code',Acres:'Mapped acres'}},
-    {name:'RI local conservation', url:ri+'ENV_Conservation_Lands_Local_spf/FeatureServer/0', zoom:10, color:'#2178c5', title:'NAME'}
+    {name:'RI local conservation', url:ri+'ENV_Conservation_Lands_Local_spf/FeatureServer/0', zoom:10, color:'#2178c5', title:'Com_Name', fields:{GIS_Acre:'Mapped acres',P_Year:'Protection year'}}
   ];
   const id = name => document.getElementById(name);
   const key = 'wildheritage.scouting.v1';
@@ -16,13 +16,29 @@
     const saved = JSON.parse(localStorage.getItem(key));
     if (Array.isArray(saved)) records = saved;
   } catch {}
+  const workTypes = ['Habitat restoration','Invasive species monitoring','Trail maintenance','Litter cleanup','Wildlife monitoring','Other stewardship'];
+  const mastLevels = ['None','Light','Moderate','Heavy'];
+  const validPoint = p => Array.isArray(p) && p.length===2 && p.every(Number.isFinite) && Math.abs(p[0])<=90 && Math.abs(p[1])<=180;
+  const validCount = (value,min,max) => Number.isInteger(value) && value>=min && value<=max;
+  function validRecord(entry) {
+    if (!entry || typeof entry.time!=='string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(entry.time) ||
+        !Number.isFinite(Date.parse(entry.time)) || typeof entry.notes!=='string' || entry.notes.length>500) return false;
+    if (entry.kind==='sit') return validCount(entry.minutes,1,1440) && validCount(entry.deer,0,1000);
+    if (entry.kind==='mast') return validPoint(entry.point) && mastLevels.includes(entry.mast);
+    return entry.kind==='work' && validPoint(entry.point) && workTypes.includes(entry.work) && validCount(entry.minutes,1,1440);
+  }
+  records=records.filter(validRecord);
   let map;
+  let workPins;
   let pins;
   let selectedPoint;
   const windows = ['5–9 AM','9 AM–1 PM','1–5 PM','5–9 PM','9 PM–5 AM'];
   function insights() {
     const groups = windows.map(label => ({label,hours:0,deer:0,count:0}));
     pins?.clearLayers();
+    workPins?.clearLayers();
+    const work = records.filter(entry=>entry.kind==='work');
+    id('workSummary').textContent=work.length+' stewardship visits · '+(work.reduce((total,entry)=>total+entry.minutes,0)/60).toFixed(1)+' hours contributed';
     for (const entry of records) {
       if (entry.kind === 'sit') {
         const hour = Number(entry.time.slice(11,13));
@@ -32,8 +48,9 @@
         group.count++;
       } else if (pins) {
         const note = document.createElement('div');
-        note.textContent = 'Acorn mast: '+entry.mast+' · '+entry.time.replace('T',' ')+' '+entry.notes;
-        L.circleMarker(entry.point,{radius:7,color:'#703d16',fillColor:'#f3a32d',fillOpacity:.9}).bindPopup(note).addTo(pins);
+        const stewardship=entry.kind==='work';
+        note.textContent = (stewardship?entry.work+' · '+entry.minutes+' min':'Acorn mast: '+entry.mast)+' · '+entry.time.replace('T',' ')+' '+entry.notes;
+        L.circleMarker(entry.point,{radius:7,color:stewardship?'#123f37':'#703d16',fillColor:stewardship?'#38c6a3':'#f3a32d',fillOpacity:.9}).bindPopup(note).addTo(stewardship?workPins:pins);
       }
     }
     id('scoutInsights').replaceChildren(...groups.filter(g=>g.count).sort((a,b)=>b.deer/b.hours-a.deer/a.hours).map(g=>{
@@ -44,7 +61,7 @@
     id('scoutSummary').textContent=records.length+' observations on this device. Sits are grouped by local start time. Log zero-sighting sits too. Small samples and where you choose to sit affect the results.';
     id('scoutHistory').replaceChildren(...records.slice().reverse().map(entry=>{
       const row=document.createElement('li');
-      row.textContent=entry.time.replace('T',' ')+' · '+(entry.kind==='sit'?entry.deer+' deer in '+entry.minutes+' min':'Acorn mast: '+entry.mast)+(entry.notes?' · '+entry.notes:'')+' ';
+      row.textContent=entry.time.replace('T',' ')+' · '+(entry.kind==='sit'?entry.deer+' deer in '+entry.minutes+' min':entry.kind==='work'?entry.work+' · '+entry.minutes+' min':'Acorn mast: '+entry.mast)+(entry.notes?' · '+entry.notes:'')+' ';
       const remove=document.createElement('button');
       remove.type='button';
       remove.textContent='Delete';
@@ -65,11 +82,15 @@
     const kind=id('scoutKind');
     const refresh=()=>{
       const mast=kind.value==='mast';
+      const work=kind.value==='work';
       id('sitFields').hidden=mast;
+      id('workFields').hidden=!work;
+      id('deerFields').hidden=work;
       id('mastFields').hidden=!mast;
       id('scoutMinutes').disabled=mast;
-      id('scoutDeer').disabled=mast;
+      id('scoutDeer').disabled=mast||work;
     };
+    id('scoutWork').replaceChildren(...workTypes.map(label=>new Option(label)));
     kind.onchange=refresh;
     refresh();
     const now=new Date();
@@ -78,30 +99,68 @@
       event.preventDefault();
       const point=selectedPoint?.() || map?.getCenter();
       const entry={kind:kind.value,time:id('scoutTime').value,notes:id('scoutNotes').value.trim()};
-      if (kind.value==='mast') {
-        if (!point) { id('scoutStatus').textContent='Open the map before recording mast.'; return; }
+      if (kind.value!=='sit') {
+        if (!point) { id('scoutStatus').textContent='Open the map before adding a mapped observation.'; return; }
         entry.point=[point.lat,point.lng];
-        entry.mast=id('scoutMast').value;
+        if(kind.value==='mast') entry.mast=id('scoutMast').value;
+        else { entry.work=id('scoutWork').value; entry.minutes=id('scoutMinutes').valueAsNumber; }
       } else {
         entry.minutes=id('scoutMinutes').valueAsNumber;
         entry.deer=id('scoutDeer').valueAsNumber;
       }
-      if(save([...records,entry])) {
+      if(validRecord(entry) && save([...records,entry])) {
         id('scoutNotes').value='';
         id('scoutStatus').textContent='Observation saved on this device.';
       }
     };
+    id('scoutExport').onclick=()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify({format:'wild-heritage-observations',version:1,records},null,2)],{type:'application/json'}));
+      const link=document.createElement('a');
+      link.href=url;
+      link.download='wild-heritage-observations.json';
+      link.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    };
+    id('scoutImport').onchange=async event=>{
+      const file=event.target.files[0];
+      if(!file)return;
+      try {
+        if(file.size>10_000_000)throw Error();
+        const backup=JSON.parse(await file.text());
+        if(backup.format!=='wild-heritage-observations'||backup.version!==1||!Array.isArray(backup.records)||!backup.records.every(validRecord))throw Error();
+        const signature=({kind,time,notes,minutes,deer,mast,work,point})=>JSON.stringify([kind,time,notes,minutes,deer,mast,work,point]);
+        const existing=new Set(records.map(signature));
+        const additions=backup.records.filter(entry=>{
+          const key=signature(entry);
+          if(existing.has(key))return false;
+          existing.add(key);
+          return true;
+        });
+        if(save([...records,...additions]))id('scoutStatus').textContent=additions.length+' new observations imported.';
+      } catch { id('scoutStatus').textContent='Could not import this observations backup.'; }
+      finally { event.target.value=''; }
+    };
     insights();
   }
   window.scouting = {
-    show(mode){ id('scouting').hidden=mode!=='hunt'; },
+    show(mode){
+      const panel=id('scouting');
+      panel.hidden=mode!=='hunt'&&mode!=='conserve';
+      id('huntingInsights').hidden=mode!=='hunt';
+      id('scoutKind').value=mode==='conserve'?'work':'sit';
+      id('scoutKind').onchange();
+    },
     attach(instance, streets, getPoint) {
       map=instance;
       selectedPoint=getPoint;
       const national='https://basemap.nationalmap.gov/arcgis/rest/services/';
       const tiles=(service)=>L.tileLayer(national+service+'/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:16,maxZoom:19,attribution:'USGS The National Map'});
       pins=L.layerGroup().addTo(map);
-      const overlays={'My acorn observations':pins};
+      workPins=L.layerGroup().addTo(map);
+      const protectedAreas=L.tileLayer('https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/PADUS3_0PublicAccess/MapServer/tile/{z}/{y}/{x}',{
+        maxZoom:19,opacity:.65,attribution:'USGS GAP · PAD-US 3.0 (2022)'
+      });
+      const overlays={'US protected lands (PAD-US 3.0)':protectedAreas,'My acorn observations':pins,'My stewardship work':workPins};
       for(const item of layers) {
         const group=L.geoJSON(null,{
           style:{color:item.color,weight:2,fillOpacity:item.title==='PlatLot'?.08:.22},
