@@ -28,6 +28,12 @@
     return entry.kind==='work' && validPoint(entry.point) && workTypes.includes(entry.work) && validCount(entry.minutes,1,1440);
   }
   records=records.filter(validRecord);
+  const directions=['N','NE','E','SE','S','SW','W','NW','Calm','Unknown'];
+  const seasonFor=time=>['Winter','Spring','Summer','Fall'][Math.floor(Number(time.slice(5,7))%12/3)];
+  let preferences={};
+  try { preferences=JSON.parse(localStorage.getItem('wildheritage.mapPreferences'))||{}; } catch {}
+  let activeMode;
+  let applyPreferences;
   let map;
   let workPins;
   let pins;
@@ -41,6 +47,8 @@
     id('workSummary').textContent=work.length+' stewardship visits · '+(work.reduce((total,entry)=>total+entry.minutes,0)/60).toFixed(1)+' hours contributed';
     for (const entry of records) {
       if (entry.kind === 'sit') {
+        if(id('filterSeason').value && seasonFor(entry.time)!==id('filterSeason').value)continue;
+        if(id('filterWind').value && (entry.wind||'Unknown')!==id('filterWind').value)continue;
         const hour = Number(entry.time.slice(11,13));
         const group = groups[hour>=5&&hour<9?0:hour>=9&&hour<13?1:hour>=13&&hour<17?2:hour>=17&&hour<21?3:4];
         group.hours += entry.minutes / 60;
@@ -55,10 +63,11 @@
     }
     id('scoutInsights').replaceChildren(...groups.filter(g=>g.count).sort((a,b)=>b.deer/b.hours-a.deer/a.hours).map(g=>{
       const row=document.createElement('li');
-      row.textContent=g.label+' starts · '+(g.deer/g.hours).toFixed(2)+' deer/hour · '+g.count+' sits · '+g.hours.toFixed(1)+' hours';
+      row.textContent=g.label+' starts · '+(g.deer/g.hours).toFixed(2)+' deer/hour · '+g.count+' sits · '+g.hours.toFixed(1)+' hours'+(g.count<3?' · early signal':'');
       return row;
     }));
-    id('scoutSummary').textContent=records.length+' observations on this device. Sits are grouped by local start time. Log zero-sighting sits too. Small samples and where you choose to sit affect the results.';
+    const matching=groups.reduce((count,group)=>count+group.count,0);
+    id('scoutSummary').textContent=matching+' matching sits. Windows with fewer than 3 sits are marked early signal. Sits are grouped by local start time. Log zero-sighting sits too. Small samples and where you choose to sit affect the results.';
     id('scoutHistory').replaceChildren(...records.slice().reverse().map(entry=>{
       const row=document.createElement('li');
       row.textContent=entry.time.replace('T',' ')+' · '+(entry.kind==='sit'?entry.deer+' deer in '+entry.minutes+' min':entry.kind==='work'?entry.work+' · '+entry.minutes+' min':'Acorn mast: '+entry.mast)+(entry.notes?' · '+entry.notes:'')+' ';
@@ -86,11 +95,16 @@
       id('sitFields').hidden=mast;
       id('workFields').hidden=!work;
       id('deerFields').hidden=work;
+      id('windField').hidden=mast||work;
       id('mastFields').hidden=!mast;
       id('scoutMinutes').disabled=mast;
       id('scoutDeer').disabled=mast||work;
     };
     id('scoutWork').replaceChildren(...workTypes.map(label=>new Option(label)));
+    id('scoutWind').replaceChildren(...['Unknown',...directions.filter(d=>d!=='Unknown')].map(d=>new Option(d)));
+    id('filterWind').replaceChildren(new Option('All winds',''),...directions.map(d=>new Option(d)));
+    id('filterSeason').onchange=insights;
+    id('filterWind').onchange=insights;
     kind.onchange=refresh;
     refresh();
     const now=new Date();
@@ -107,6 +121,7 @@
       } else {
         entry.minutes=id('scoutMinutes').valueAsNumber;
         entry.deer=id('scoutDeer').valueAsNumber;
+        entry.wind=id('scoutWind').value;
       }
       if(validRecord(entry) && save([...records,entry])) {
         id('scoutNotes').value='';
@@ -128,7 +143,7 @@
         if(file.size>10_000_000)throw Error();
         const backup=JSON.parse(await file.text());
         if(backup.format!=='wild-heritage-observations'||backup.version!==1||!Array.isArray(backup.records)||!backup.records.every(validRecord))throw Error();
-        const signature=({kind,time,notes,minutes,deer,mast,work,point})=>JSON.stringify([kind,time,notes,minutes,deer,mast,work,point]);
+        const signature=({kind,time,notes,minutes,deer,mast,work,point,wind})=>JSON.stringify([kind,time,notes,minutes,deer,mast,work,point,wind||"Unknown"]);
         const existing=new Set(records.map(signature));
         const additions=backup.records.filter(entry=>{
           const key=signature(entry);
@@ -175,6 +190,8 @@
   };
   window.scouting = {
     show(mode){
+      activeMode=mode;
+      applyPreferences?.();
       const panel=id('scouting');
       panel.hidden=mode!=='hunt'&&mode!=='conserve';
       id('huntingInsights').hidden=mode!=='hunt';
@@ -250,7 +267,50 @@
         map.on('moveend',()=>{clearTimeout(timer);timer=setTimeout(load,180);});
         if(item.name==='RI state conservation')group.addTo(map);
       }
-      L.control.layers({Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly'),'USGS hybrid imagery + topo':tiles('USGSImageryTopo'),'USGS shaded relief':tiles('USGSShadedReliefOnly')},overlays,{collapsed:false}).addTo(map);
+      const basemaps={Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly'),'USGS hybrid imagery + topo':tiles('USGSImageryTopo'),'USGS shaded relief':tiles('USGSShadedReliefOnly')};
+      const control=L.control.layers(basemaps,overlays,{collapsed:false}).addTo(map);
+      const panel=control.getContainer();
+      panel.hidden=true;
+      panel.style.display='none';
+      id('mapLayers').onclick=()=>{
+        panel.hidden=!panel.hidden;
+        panel.style.display=panel.hidden?'none':'';
+        id('mapLayers').setAttribute('aria-expanded',String(!panel.hidden));
+      };
+      id('mapWind').onclick=()=>{
+        const weather=id('weatherPanel');
+        weather.open=true;
+        weather.scrollIntoView({block:'nearest'});
+        id('loadWeather').focus();
+      };
+      id('mapOffline').onclick=()=>{id('offlineInfo').hidden=!id('offlineInfo').hidden;};
+      let switching=false;
+      applyPreferences=()=>{
+        switching=true;
+        try {
+          const defaults=activeMode==='conserve'?['RI local conservation','My stewardship work']:['RI state conservation','My acorn observations'];
+          const saved=preferences[activeMode]||{};
+          const base=Object.hasOwn(basemaps,saved.base)?saved.base:activeMode==='conserve'?'USGS topographic':'Streets';
+          for(const [name,layer] of Object.entries(basemaps)){
+            if(name===base)map.addLayer(layer);
+            else map.removeLayer(layer);
+          }
+          const enabled=Array.isArray(saved.overlays)?saved.overlays:defaults;
+          for(const [name,layer] of Object.entries(overlays)){
+            if(enabled.includes(name))map.addLayer(layer);
+            else map.removeLayer(layer);
+          }
+        } finally { switching=false; }
+      };
+      map.on('baselayerchange overlayadd overlayremove',()=>{
+        if(switching)return;
+        preferences[activeMode]={
+          base:Object.keys(basemaps).find(name=>map.hasLayer(basemaps[name])),
+          overlays:Object.keys(overlays).filter(name=>map.hasLayer(overlays[name]))
+        };
+        try { localStorage.setItem('wildheritage.mapPreferences',JSON.stringify(preferences)); } catch {}
+      });
+      applyPreferences();
       insights();
     }
   };
