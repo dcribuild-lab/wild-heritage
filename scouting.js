@@ -240,6 +240,13 @@
             link.textContent=item.title==='PlatLot'?'Municipal assessor resources':'Check official DEM maps and rules';
             panel.append(link);
             layer.bindPopup(panel);
+            const labelZoom=item.title==='PlatLot'?17:13;
+            const labelText=data[item.title];
+            if(labelText!=null&&String(labelText).trim()&&map.getZoom()>=labelZoom){
+              const mapLabel=document.createElement('span');
+              mapLabel.textContent=String(labelText);
+              layer.bindTooltip(mapLabel,{permanent:true,direction:'center',className:'boundary-label',interactive:false});
+            }
           }
         });
         overlays[item.name]=group;
@@ -292,8 +299,8 @@
         'USGS aerial imagery':'Overhead photography',
         'USGS hybrid imagery + topo':'Photography with map detail',
         'USGS shaded relief':'Shaded terrain shape',
-        'RI tax parcels':'Rhode Island reference boundaries · zoom 16+',
-        'RI state conservation':'Rhode Island state conservation · zoom 10+',
+        'RI tax parcels':'Rhode Island reference boundaries · zoom 16+ · parcel IDs at 17+',
+        'RI state conservation':'Rhode Island state conservation · names at zoom 13+',
         'RI local conservation':'Rhode Island local conservation · zoom 10+',
         'US protected lands (PAD-US 3.0)':'U.S. protected areas · check official access rules',
         'My acorn observations':'Acorn checks saved on this device',
