@@ -208,17 +208,21 @@
       const protectedAreas=L.tileLayer('https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/PADUS3_0PublicAccess/MapServer/tile/{z}/{y}/{x}',{
         maxZoom:19,opacity:.65,attribution:'USGS GAP · PAD-US 3.0 (2022)'
       });
-      const WetlandTiles=L.TileLayer.extend({
+      const ExportTiles=L.TileLayer.extend({
         getTileUrl(coords){
           const crs=L.CRS.EPSG3857;
           const nw=crs.project(crs.pointToLatLng(L.point(coords.x*256,coords.y*256),coords.z));
           const se=crs.project(crs.pointToLatLng(L.point((coords.x+1)*256,(coords.y+1)*256),coords.z));
           const query=new URLSearchParams({bbox:[nw.x,se.y,se.x,nw.y].join(','),bboxSR:'3857',imageSR:'3857',size:'256,256',format:'png32',transparent:'true',f:'image'});
-          return 'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/export?'+query;
+          if(this.options.rasterFunction){
+            query.set('renderingRule',JSON.stringify({rasterFunction:this.options.rasterFunction}));
+          }
+          return this._url+'?'+query;
         }
       });
-      const wetlands=new WetlandTiles('',{minZoom:11,maxZoom:19,opacity:.7,attribution:'USFWS National Wetlands Inventory'});
-      const overlays={'U.S. wetlands':wetlands,'US protected lands (PAD-US 3.0)':protectedAreas,'My acorn observations':pins,'My stewardship work':workPins};
+      const wetlands=new ExportTiles('https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/export',{minZoom:11,maxZoom:19,opacity:.7,attribution:'USFWS National Wetlands Inventory'});
+      const water=L.tileLayer(national+'USGSHydroCached/MapServer/tile/{z}/{y}/{x}',{maxNativeZoom:16,maxZoom:19,opacity:.75,attribution:'USGS National Map hydrography'});
+      const overlays={'U.S. rivers & waterbodies':water,'U.S. wetlands':wetlands,'US protected lands (PAD-US 3.0)':protectedAreas,'My acorn observations':pins,'My stewardship work':workPins};
       for(const item of layers) {
         const group=L.geoJSON(null,{
           style:{color:item.color,weight:2,fillOpacity:item.title==='PlatLot'?.08:.22},
@@ -285,14 +289,31 @@
         if(item.name==='RI state conservation')group.addTo(map);
       }
       const basemaps={Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly'),'USGS hybrid imagery + topo':tiles('USGSImageryTopo'),'USGS shaded relief':tiles('USGSShadedReliefOnly')};
+      const elevation='https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage';
+      const terrainFunctions={
+        'Bare-earth hillshade':'Hillshade',
+        'Elevation colors':'Elevation Tinted Hillshade',
+        'Slope steepness':'Slope Map',
+        'Slope direction':'Aspect Map'
+      };
+      const terrain=Object.fromEntries(Object.entries(terrainFunctions).map(([name,rasterFunction])=>[name,
+        new ExportTiles(elevation,{rasterFunction,maxNativeZoom:17,maxZoom:19,attribution:'USGS 3DEP bare-earth elevation'})
+      ]));
+      Object.assign(basemaps,terrain);
       const panel=id('layersDashboard');
       const groups=[
-        ['Basemap',basemaps,true],
-        ['Land & access',Object.fromEntries(Object.entries(overlays).filter(([name])=>!name.startsWith('My ')&&name!=='U.S. wetlands')),false],
-        ['Habitat',{'U.S. wetlands':wetlands},false],
+        ['Basemap',Object.fromEntries(Object.entries(basemaps).filter(([name])=>!Object.hasOwn(terrain,name))),true],
+        ['Terrain views',terrain,true],
+        ['Land & access',Object.fromEntries(Object.entries(overlays).filter(([name])=>!name.startsWith('My ')&&name!=='U.S. wetlands'&&name!=='U.S. rivers & waterbodies')),false],
+        ['Water & habitat',{'U.S. wetlands':wetlands,'U.S. rivers & waterbodies':water},false],
         ['My fieldwork',Object.fromEntries(Object.entries(overlays).filter(([name])=>name.startsWith('My '))),false]
       ];
       const hints={
+        'Bare-earth hillshade':'USGS 3DEP · ground relief with canopy excluded from the elevation model',
+        'Elevation colors':'USGS 3DEP · color and shadow show elevation changes',
+        'Slope steepness':'USGS 3DEP · compare steep and gentle ground',
+        'Slope direction':'USGS 3DEP · shows the direction a slope faces',
+        'U.S. rivers & waterbodies':'USGS National Map · streams, lakes and water features',
         'U.S. wetlands':'National Wetlands Inventory · zoom 11+ · mapped habitat',
         Streets:'Roads, paths and place names',
         'USGS topographic':'Contours and mapped features',
