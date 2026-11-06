@@ -142,6 +142,37 @@
     };
     insights();
   }
+  id('loadWeather').onclick=async event=>{
+    const button=event.currentTarget;
+    const status=id('weatherStatus');
+    const results=id('weatherHours');
+    const point=selectedPoint?.()||map?.getCenter();
+    if(!point){status.textContent='Select a point on the map first.';return;}
+    const coordinates=point.lat.toFixed(3)+','+point.lng.toFixed(3);
+    button.disabled=true;
+    results.replaceChildren();
+    status.textContent='Loading NWS forecast for '+coordinates+'…';
+    try {
+      const request=async url=>{
+        const response=await fetch(url,{signal:AbortSignal.timeout(12000),headers:{Accept:'application/geo+json'}});
+        if(!response.ok)throw Error();
+        return response.json();
+      };
+      const grid=await request('https://api.weather.gov/points/'+coordinates);
+      const url=new URL(grid.properties.forecastHourly);
+      if(url.origin!=='https://api.weather.gov')throw Error();
+      const forecast=await request(url);
+      for(const hour of forecast.properties.periods.slice(0,12)){
+        const row=document.createElement('li');
+        const time=new Intl.DateTimeFormat(undefined,{hour:'numeric',weekday:'short',timeZone:grid.properties.timeZone}).format(new Date(hour.startTime));
+        const rain=hour.probabilityOfPrecipitation?.value;
+        row.textContent=time+' · '+hour.windDirection+' '+hour.windSpeed+' · '+hour.temperature+'°'+hour.temperatureUnit+' · '+hour.shortForecast+(rain==null?'':' · '+rain+'% precipitation');
+        results.append(row);
+      }
+      status.textContent='NWS hourly forecast for '+coordinates+' · '+grid.properties.timeZone.replaceAll('_',' ');
+    }catch{status.textContent='Forecast unavailable for '+coordinates+'. Check your connection or choose another U.S. location.';}
+    finally{button.disabled=false;}
+  };
   window.scouting = {
     show(mode){
       const panel=id('scouting');
@@ -219,7 +250,7 @@
         map.on('moveend',()=>{clearTimeout(timer);timer=setTimeout(load,180);});
         if(item.name==='RI state conservation')group.addTo(map);
       }
-      L.control.layers({Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly')},overlays,{collapsed:false}).addTo(map);
+      L.control.layers({Streets:streets,'USGS topographic':tiles('USGSTopo'),'USGS aerial imagery':tiles('USGSImageryOnly'),'USGS hybrid imagery + topo':tiles('USGSImageryTopo'),'USGS shaded relief':tiles('USGSShadedReliefOnly')},overlays,{collapsed:false}).addTo(map);
       insights();
     }
   };
