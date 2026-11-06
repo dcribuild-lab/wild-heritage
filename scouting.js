@@ -208,7 +208,17 @@
       const protectedAreas=L.tileLayer('https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/PADUS3_0PublicAccess/MapServer/tile/{z}/{y}/{x}',{
         maxZoom:19,opacity:.65,attribution:'USGS GAP · PAD-US 3.0 (2022)'
       });
-      const overlays={'US protected lands (PAD-US 3.0)':protectedAreas,'My acorn observations':pins,'My stewardship work':workPins};
+      const WetlandTiles=L.TileLayer.extend({
+        getTileUrl(coords){
+          const crs=L.CRS.EPSG3857;
+          const nw=crs.project(crs.pointToLatLng(L.point(coords.x*256,coords.y*256),coords.z));
+          const se=crs.project(crs.pointToLatLng(L.point((coords.x+1)*256,(coords.y+1)*256),coords.z));
+          const query=new URLSearchParams({bbox:[nw.x,se.y,se.x,nw.y].join(','),bboxSR:'3857',imageSR:'3857',size:'256,256',format:'png32',transparent:'true',f:'image'});
+          return 'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/export?'+query;
+        }
+      });
+      const wetlands=new WetlandTiles('',{minZoom:11,maxZoom:19,opacity:.7,attribution:'USFWS National Wetlands Inventory'});
+      const overlays={'U.S. wetlands':wetlands,'US protected lands (PAD-US 3.0)':protectedAreas,'My acorn observations':pins,'My stewardship work':workPins};
       for(const item of layers) {
         const group=L.geoJSON(null,{
           style:{color:item.color,weight:2,fillOpacity:item.title==='PlatLot'?.08:.22},
@@ -271,10 +281,12 @@
       const panel=id('layersDashboard');
       const groups=[
         ['Basemap',basemaps,true],
-        ['Land & access',Object.fromEntries(Object.entries(overlays).filter(([name])=>!name.startsWith('My '))),false],
+        ['Land & access',Object.fromEntries(Object.entries(overlays).filter(([name])=>!name.startsWith('My ')&&name!=='U.S. wetlands')),false],
+        ['Habitat',{'U.S. wetlands':wetlands},false],
         ['My fieldwork',Object.fromEntries(Object.entries(overlays).filter(([name])=>name.startsWith('My '))),false]
       ];
       const hints={
+        'U.S. wetlands':'National Wetlands Inventory · zoom 11+ · mapped habitat',
         Streets:'Roads, paths and place names',
         'USGS topographic':'Contours and mapped features',
         'USGS aerial imagery':'Overhead photography',
@@ -340,7 +352,7 @@
       id('mapOffline').onclick=()=>{id('offlineInfo').hidden=!id('offlineInfo').hidden;};
       applyPreferences=()=>{
 
-          const defaults=activeMode==='conserve'?['RI local conservation','My stewardship work']:['RI state conservation','My acorn observations'];
+          const defaults=activeMode==='young'?[]:activeMode==='conserve'?['RI local conservation','My stewardship work','U.S. wetlands']:['RI state conservation','My acorn observations'];
           const saved=preferences[activeMode]||{};
           const base=Object.hasOwn(basemaps,saved.base)?saved.base:activeMode==='conserve'?'USGS topographic':'Streets';
           for(const [name,layer] of Object.entries(basemaps)){
